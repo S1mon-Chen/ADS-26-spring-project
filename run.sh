@@ -11,4 +11,5 @@ exec "${PYTHON}" main.py \
   --model Qwen/Qwen3.5-0.8B \
   --prompt "Tell me a short story." \
   --benchmark true \
-  --stream true
+  --stream true \
+  --max-new-tokens 64
