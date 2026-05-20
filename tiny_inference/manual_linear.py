@@ -45,10 +45,21 @@ def torch_causal_conv1d_update(
     4. 转回原始 dtype 返回
     """
     # ===== TODO: KV Cache - Linear Attention 单步卷积更新 (START) =====
-    raise NotImplementedError(
-        "请按文件内「实现提示」完成"
-    )
+    _, hidden_size, seq_len = hidden_states.shape
+    state_len = conv_state.shape[-1]
 
+    hidden_states_new = torch.cat([conv_state, hidden_states], dim=-1).to(weight.dtype)
+    conv_state.copy_(hidden_states_new[:, :, -state_len:])
+    out = F.conv1d(
+        hidden_states_new,
+        weight.unsqueeze(1),
+        bias,
+        padding=0,
+        groups=hidden_size,
+    )
+    out = F.silu(out[:, :, -seq_len:])
+    out = out.to(hidden_states.dtype)
+    return out
     # ===== TODO: KV Cache - Linear Attention 单步卷积更新 (END) =====
 
 
@@ -225,7 +236,12 @@ def qwen3_5_linear_attn_forward(
     # ===== TODO: KV Cache - Linear Attention 判断是否走 decode 单步路径 (START) =====
     # 四个条件同时满足时走 decode 单步路径（即 use_precomputed_states=True），否则走 prefill 完整路径
     # 满足条件提示： cache_params？ seq_len？ cache_position？
-    use_precomputed_states = False # 是否进入decode单步路径，目前默认为False，实现后被覆盖
+    use_precomputed_states = (
+        cache_params is not None
+        and cache_params.has_previous_state
+        and seq_len == 1
+        and cache_position is not None
+    )
 
     # ===== TODO: KV Cache - Linear Attention 判断是否走 decode 单步路径 (END) =====
 
@@ -234,6 +250,9 @@ def qwen3_5_linear_attn_forward(
     # 取出本层的卷积状态（滑动窗口）和递推状态（记忆矩阵），decode 路径会传给各自的函数
     conv_state = None # 卷积状态，目前默认为None，实现后被覆盖
     recurrent_state = None # 递推状态，目前默认为None，实现后被覆盖
+    if cache_params is not None:
+        conv_state = cache_params.conv_states[layer_idx]
+        recurrent_state = cache_params.recurrent_states[layer_idx]
 
     # ===== TODO: KV Cache - Linear Attention 从缓存读取本层状态 (END) =====
 
@@ -260,7 +279,12 @@ def qwen3_5_linear_attn_forward(
         # ===== TODO: KV Cache - Linear Attention 保存卷积状态到缓存 (START) =====
         # 用 F.pad(mixed_qkv, (left, 0)) 将 mixed_qkv 保存为滑动窗口快照，存入缓存对应层的槽位
         # left = 卷积核的最后一维 - mixed_qkv 的最后一维（正值左侧补零、负值从左裁剪，结果始终是 kernel_size 帧）
-
+        if cache_params is not None:
+            conv_state = F.pad(
+                mixed_qkv,
+                (linear_attn_module.conv_kernel_size - mixed_qkv.shape[-1], 0),
+            )
+            cache_params.conv_states[layer_idx] = conv_state
         # ===== TODO: KV Cache - Linear Attention 保存卷积状态到缓存 (END) =====
         mixed_qkv = F.silu(linear_attn_module.conv1d(mixed_qkv)[:, :, :seq_len])
 
@@ -304,7 +328,8 @@ def qwen3_5_linear_attn_forward(
 
     # ===== TODO: KV Cache - Linear Attention 保存递推状态到缓存 (START) =====
     # 将更新后的记忆矩阵写回缓存，供下一步 decode 使用
-
+    if cache_params is not None:
+        cache_params.recurrent_states[layer_idx] = last_recurrent_state
     # ===== TODO: KV Cache - Linear Attention 保存递推状态到缓存 (END) =====
 
     # 门控归一化：用 z 对输出做通道归一化，增强表达能力
