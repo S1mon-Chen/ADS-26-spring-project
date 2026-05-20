@@ -162,9 +162,21 @@ class Qwen3_5DynamicCache:
         3. 返回新实例。
         """
         # ===== TODO: Prefix Cache - (START) =====
-        raise NotImplementedError(
-            "请根据提示实现 clone()"
-        )
+        cloned = object.__new__(Qwen3_5DynamicCache)
+        cloned.layer_types = self.layer_types
+        cloned.transformer_layers = self.transformer_layers
+        cloned.last_linear_layer = self.last_linear_layer
+
+        def clone_optional_tensor(tensor: torch.Tensor | None) -> torch.Tensor | None:
+            return None if tensor is None else tensor.clone()
+
+        cloned.key_cache = [clone_optional_tensor(tensor) for tensor in self.key_cache]
+        cloned.value_cache = [clone_optional_tensor(tensor) for tensor in self.value_cache]
+        cloned.conv_states = [clone_optional_tensor(tensor) for tensor in self.conv_states]
+        cloned.recurrent_states = [
+            clone_optional_tensor(tensor) for tensor in self.recurrent_states
+        ]
+        return cloned
         # ===== TODO: Prefix Cache - (END) =====
 
     @property

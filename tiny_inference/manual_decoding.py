@@ -51,6 +51,12 @@ def decode_tokens_manual(
     prefill_input_ids = input_ids
     prefill_past_kv = None
     prefix_hit_tokens = 0
+    if use_cache and prefix_cache is not None:
+        matched_len, loaded_cache = prefix_cache.lookup(input_ids[0].tolist())
+        if matched_len > 0:
+            prefill_input_ids = input_ids[:, matched_len:]
+            prefill_past_kv = loaded_cache
+            prefix_hit_tokens = matched_len
     # ===== TODO: Prefix Cache - (END) =====
 
 
@@ -70,6 +76,8 @@ def decode_tokens_manual(
     # 当 use_cache=True 且 prefix_cache 不为 None 时：
     #   调用 prefix_cache.insert(input_ids[0].tolist(), past_key_values)
     # 注意：insert 内部会负责 clone，这里不用手动 clone。
+    if use_cache and prefix_cache is not None:
+        prefix_cache.insert(input_ids[0].tolist(), past_key_values)
     # ===== TODO: Prefix Cache - (END) =====
 
     # 从 prefill 输出的最后一个位置采样第一个新 token
