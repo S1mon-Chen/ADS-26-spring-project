@@ -96,9 +96,30 @@ class PrefixCache:
              - 返回 (matched_len, self._entries[best_key].clone())。
         """
         # ===== TODO: Prefix Cache - (START) =====
-        raise NotImplementedError(
-            "请根据提示实现 lookup()"
-        )
+        token_tuple = tuple(token_ids)
+        best_key: tuple[int, ...] | None = None
+        best_len = 0
+
+        for cached_tokens in self._entries:
+            cached_len = len(cached_tokens)
+            if cached_len > len(token_tuple):
+                continue
+            if cached_tokens == token_tuple[:cached_len] and cached_len > best_len:
+                best_key = cached_tokens
+                best_len = cached_len
+
+        if best_key is None:
+            self.misses += 1
+            return 0, None
+
+        matched_len = best_len
+        if matched_len == len(token_tuple):
+            matched_len = max(len(token_tuple) - 1, 0)
+
+        self._entries.move_to_end(best_key)
+        self.hits += 1
+        self.hit_tokens += matched_len
+        return matched_len, self._entries[best_key].clone()
         # ===== TODO: Prefix Cache - (END) =====
 
     # ---------- 插入 ----------
@@ -127,9 +148,19 @@ class PrefixCache:
         4. self._entries[key] = cache.clone()（新插入的条目天然位于队尾 = 最近使用）。
         """
         # ===== TODO: Prefix Cache - (START) =====
-        raise NotImplementedError(
-            "请根据提示实现 insert()"
-        )
+        if self._max_entries <= 0:
+            return
+
+        key = tuple(token_ids)
+        if key in self._entries:
+            self._entries.move_to_end(key)
+            return
+
+        if len(self._entries) >= self._max_entries:
+            self._entries.popitem(last=False)
+            self.evictions += 1
+
+        self._entries[key] = cache.clone()
         # ===== TODO: Prefix Cache - (END) =====
 
     # ---------- 辅助 ----------
