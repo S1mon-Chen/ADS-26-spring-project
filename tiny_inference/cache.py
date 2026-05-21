@@ -213,9 +213,20 @@ class Qwen3_5DynamicCache:
         3. 不要 clone——反正 tensor 已离开 GPU，且 `torch.save` 会再做一次拷贝。
         """
         # ===== TODO: SSD Offload - cache 序列化 (START) =====
-        raise NotImplementedError(
-            "请根据提示实现 to_cpu_state_dict()"
-        )
+        def to_cpu_optional(tensor: torch.Tensor | None) -> torch.Tensor | None:
+            return None if tensor is None else tensor.detach().cpu()
+
+        return {
+            "layer_types": list(self.layer_types),
+            "transformer_layers": list(self.transformer_layers),
+            "last_linear_layer": self.last_linear_layer,
+            "key_cache": [to_cpu_optional(tensor) for tensor in self.key_cache],
+            "value_cache": [to_cpu_optional(tensor) for tensor in self.value_cache],
+            "conv_states": [to_cpu_optional(tensor) for tensor in self.conv_states],
+            "recurrent_states": [
+                to_cpu_optional(tensor) for tensor in self.recurrent_states
+            ],
+        }
         # ===== TODO: SSD Offload - cache 序列化 (END) =====
 
     @classmethod
@@ -242,9 +253,21 @@ class Qwen3_5DynamicCache:
         4. 返回 obj。
         """
         # ===== TODO: SSD Offload - cache 反序列化 (START) =====
-        raise NotImplementedError(
-            "请根据提示实现 from_cpu_state_dict()"
-        )
+        obj = object.__new__(cls)
+        obj.layer_types = list(state["layer_types"])
+        obj.transformer_layers = list(state["transformer_layers"])
+        obj.last_linear_layer = state["last_linear_layer"]
+
+        def to_device_optional(tensor: torch.Tensor | None) -> torch.Tensor | None:
+            return None if tensor is None else tensor.to(device)
+
+        obj.key_cache = [to_device_optional(tensor) for tensor in state["key_cache"]]
+        obj.value_cache = [to_device_optional(tensor) for tensor in state["value_cache"]]
+        obj.conv_states = [to_device_optional(tensor) for tensor in state["conv_states"]]
+        obj.recurrent_states = [
+            to_device_optional(tensor) for tensor in state["recurrent_states"]
+        ]
+        return obj
         # ===== TODO: SSD Offload - cache 反序列化 (END) =====
 
     @property

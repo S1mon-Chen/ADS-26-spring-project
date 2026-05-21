@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import warnings
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
@@ -277,9 +278,21 @@ class DiskStore:
         6. 返回 path。
         """
         # ===== TODO: SSD Offload - DiskStore.save (START) =====
-        raise NotImplementedError(
-            "请根据提示实现 DiskStore.save()"
-        )
+        path = os.path.join(self.root_dir, f"{_hash_tokens(token_ids)}.pt")
+        existing_path = self._index.get(token_ids)
+        if existing_path is not None and os.path.exists(existing_path):
+            return existing_path
+
+        payload = {
+            "tokens": list(token_ids),
+            "state": cache.to_cpu_state_dict(),
+        }
+        torch.save(payload, path)
+
+        self._index[token_ids] = path
+        self.disk_writes += 1
+        self.bytes_written += os.path.getsize(path)
+        return path
         # ===== TODO: SSD Offload - DiskStore.save (END) =====
 
     # ---------- 加载 ----------
@@ -300,9 +313,21 @@ class DiskStore:
         4. self.disk_reads += 1；返回重建的 cache。
         """
         # ===== TODO: SSD Offload - DiskStore.load (START) =====
-        raise NotImplementedError(
-            "请根据提示实现 DiskStore.load()"
+        path = self._index.get(token_ids)
+        if path is None:
+            return None
+        if not os.path.exists(path):
+            self._index.pop(token_ids, None)
+            return None
+
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+        from .cache import Qwen3_5DynamicCache
+
+        cache = Qwen3_5DynamicCache.from_cpu_state_dict(
+            payload["state"], self.device
         )
+        self.disk_reads += 1
+        return cache
         # ===== TODO: SSD Offload - DiskStore.load (END) =====
 
     # ---------- 扫盘重建索引（进程间持久化的关键） ----------
@@ -324,9 +349,21 @@ class DiskStore:
         2. 不要在这里把 state 也 load 进来——那会吃爆内存。我们只读索引。
         """
         # ===== TODO: SSD Offload - DiskStore 扫盘重建索引 (START) =====
-        raise NotImplementedError(
-            "请根据提示实现 DiskStore._rebuild_index()"
-        )
+        for filename in os.listdir(self.root_dir):
+            if not filename.endswith(".pt"):
+                continue
+            path = os.path.join(self.root_dir, filename)
+            try:
+                payload = torch.load(path, map_location="cpu", weights_only=False)
+                key = tuple(payload["tokens"])
+            except Exception as exc:
+                warnings.warn(
+                    f"Skipping invalid prefix cache file {path!r}: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                continue
+            self._index[key] = path
         # ===== TODO: SSD Offload - DiskStore 扫盘重建索引 (END) =====
 
     # ---------- 辅助 ----------
@@ -433,9 +470,51 @@ class TieredPrefixCache:
         > 小提示：`_promote_to_mem` 已实现好，直接调用即可。
         """
         # ===== TODO: SSD Offload - TieredPrefixCache.lookup (START) =====
-        raise NotImplementedError(
-            "请根据提示实现 TieredPrefixCache.lookup()"
-        )
+        token_tuple = tuple(token_ids)
+        best_mem_key: tuple[int, ...] | None = None
+        best_mem_len = 0
+        best_ssd_key: tuple[int, ...] | None = None
+        best_ssd_len = 0
+
+        for cached_tokens in self._mem:
+            cached_len = len(cached_tokens)
+            if cached_len > len(token_tuple):
+                continue
+            if cached_tokens == token_tuple[:cached_len] and cached_len > best_mem_len:
+                best_mem_key = cached_tokens
+                best_mem_len = cached_len
+
+        for cached_tokens in self._disk.keys():
+            cached_len = len(cached_tokens)
+            if cached_len > len(token_tuple):
+                continue
+            if cached_tokens == token_tuple[:cached_len] and cached_len > best_ssd_len:
+                best_ssd_key = cached_tokens
+                best_ssd_len = cached_len
+
+        if best_mem_key is None and best_ssd_key is None:
+            self.misses += 1
+            return 0, None
+
+        if best_mem_key is not None and best_mem_len >= best_ssd_len:
+            winner_key = best_mem_key
+            matched_len = best_mem_len
+            self._mem.move_to_end(winner_key)
+            cache_to_clone = self._mem[winner_key]
+            self.mem_hits += 1
+        else:
+            assert best_ssd_key is not None
+            winner_key = best_ssd_key
+            matched_len = best_ssd_len
+            cache_to_clone = self._promote_to_mem(winner_key)
+            self.ssd_hits += 1
+
+        if matched_len == len(token_tuple):
+            matched_len = max(len(token_tuple) - 1, 0)
+
+        self.hits += 1
+        self.hit_tokens += matched_len
+        return matched_len, cache_to_clone.clone()
         # ===== TODO: SSD Offload - TieredPrefixCache.lookup (END) =====
 
     # ---------- 插入 ----------
@@ -464,9 +543,17 @@ class TieredPrefixCache:
         - 1/2/3/4 按上述顺序实现即可。
         """
         # ===== TODO: SSD Offload - TieredPrefixCache.insert (START) =====
-        raise NotImplementedError(
-            "请根据提示实现 TieredPrefixCache.insert()"
-        )
+        key = tuple(token_ids)
+        if key in self._mem:
+            self._mem.move_to_end(key)
+            return
+
+        if len(self._mem) >= self._max_mem_entries:
+            evict_key, evict_cache = self._mem.popitem(last=False)
+            self._disk.save(evict_key, evict_cache)
+            self.offloads += 1
+
+        self._mem[key] = cache.clone()
         # ===== TODO: SSD Offload - TieredPrefixCache.insert (END) =====
 
     # ---------- 辅助（已实现） ----------
